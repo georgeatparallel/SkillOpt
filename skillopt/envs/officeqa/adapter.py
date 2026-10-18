@@ -26,11 +26,11 @@ class OfficeQAAdapter(EnvAdapter):
         limit: int = 0,
         max_tool_turns: int = 12,
         max_completion_tokens: int = 16384,
-        search_mode: str = "auto",
+        search_mode: str = "offline",
         max_queries_per_turn: int = 4,
-        search_api_url: str | None = None,
+        search_api_url: str = os.environ.get("OFFICEQA_SEARCH_API_URL", "http://localhost:8080/search_tool/search"),
         search_auth_env: str = "OFFICEQA_CUSTOM_SEARCH_AUTH",
-        search_provider: str | None = None,
+        search_provider: str = "duckduckgo",
         search_max_num_results: int = 4,
         search_timeout_seconds: int = 20,
         use_local_tools: bool = True,
@@ -45,12 +45,9 @@ class OfficeQAAdapter(EnvAdapter):
         self.max_completion_tokens = int(max_completion_tokens)
         self.search_mode = str(search_mode or "offline")
         self.max_queries_per_turn = int(max_queries_per_turn)
-        self.search_api_url = search_api_url
-        if search_api_url is None and self.search_mode.strip().lower() in {"custom", "custom_search"}:
-            # Preserve the programmatic adapter's existing local-service default.
-            self.search_api_url = os.environ.get("OFFICEQA_SEARCH_API_URL", "http://localhost:8080/search_tool/search")
+        self.search_api_url = str(search_api_url or "").strip()
         self.search_auth_env = str(search_auth_env or "OFFICEQA_CUSTOM_SEARCH_AUTH").strip()
-        self.search_provider = search_provider
+        self.search_provider = str(search_provider or "duckduckgo").strip()
         self.search_max_num_results = int(search_max_num_results)
         self.search_timeout_seconds = int(search_timeout_seconds)
         self.use_local_tools = bool(use_local_tools)

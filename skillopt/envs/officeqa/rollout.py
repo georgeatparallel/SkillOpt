@@ -7,9 +7,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from skillopt.envs.officeqa.evaluator import evaluate
-from skillopt.envs.officeqa.parallel_search import parallel_search
 from skillopt.envs.officeqa.tool_runtime import (
-    DEFAULT_CUSTOM_SEARCH_URL,
     build_oracle_parsed_pages_context,
     custom_search,
     resolve_candidate_files,
@@ -74,30 +72,27 @@ _AZURE_SEARCH_MODE = "azure_search"
 _PARALLEL_SEARCH_MODE = "parallel"
 def _normalize_search_mode(search_mode: str | None) -> str:
     normalized = str(search_mode or _DEFAULT_SEARCH_MODE).strip().lower()
-    if normalized in {"auto", _PARALLEL_SEARCH_MODE}:
-        return normalized
     if normalized in {"custom", _CUSTOM_SEARCH_MODE}:
         return _CUSTOM_SEARCH_MODE
     if normalized in {"azure", _AZURE_SEARCH_MODE}:
         return _AZURE_SEARCH_MODE
+    if normalized == _PARALLEL_SEARCH_MODE:
+        return _PARALLEL_SEARCH_MODE
     return _DEFAULT_SEARCH_MODE
-def _resolve_search_mode(
-    search_mode: str | None, *, api_url: str | None, provider: str | None, auth_env: str,
-    use_local_tools: bool = True,
-) -> str:
-    """Resolve fresh installations without overriding saved modes or services."""
-    mode = _normalize_search_mode(search_mode)
-    if mode != "auto":
-        return mode
-    if not use_local_tools:
-        return _DEFAULT_SEARCH_MODE
-    if ((api_url or os.environ.get("OFFICEQA_SEARCH_API_URL", "")).strip()
-            or (provider or "").strip() or auth_env != "OFFICEQA_CUSTOM_SEARCH_AUTH"
-            or os.environ.get(auth_env, "").strip()):
-        return _CUSTOM_SEARCH_MODE
-    # Other harnesses retain their existing local tools and permission controls.
-    return _PARALLEL_SEARCH_MODE if get_target_backend() in {"openai_chat", "qwen_chat"} else _DEFAULT_SEARCH_MODE
+def _load_parallel_search():
+    """Import the Parallel client only when `parallel` mode is actually selected.
 
+    The `mcp` package is an optional extra, so importing it at module scope
+    would make it a hard requirement of every OfficeQA rollout.
+    """
+    try:
+        from skillopt.envs.officeqa.parallel_search import parallel_search
+    except ImportError as exc:
+        raise RuntimeError(
+            "search_mode='parallel' requires the optional MCP client. "
+            "Install it with: pip install 'skillopt[parallel]'"
+        ) from exc
+    return parallel_search
 def _build_system(
     skill_content: str,
     *,
@@ -438,7 +433,7 @@ def _run_custom_search_process(
             break
         if search_mode == _PARALLEL_SEARCH_MODE:
             # A failed explicit provider stays an error; never retry via another service.
-            results_text = parallel_search(
+            results_text = _load_parallel_search()(
                 queries, objective=item["question"], session_id=session_id,
                 max_num_results=search_max_num_results, timeout=search_timeout_seconds,
             )
@@ -550,11 +545,11 @@ def process_one(
     *,
     max_tool_turns: int = 12,
     max_completion_tokens: int = 16384,
-    search_mode: str = "auto",
+    search_mode: str = _DEFAULT_SEARCH_MODE,
     max_queries_per_turn: int = 4,
-    search_api_url: str | None = None,
+    search_api_url: str = "",
     search_auth_env: str = "OFFICEQA_CUSTOM_SEARCH_AUTH",
-    search_provider: str | None = None,
+    search_provider: str = "duckduckgo",
     search_max_num_results: int = 4,
     search_timeout_seconds: int = 20,
     use_local_tools: bool = True,
@@ -565,15 +560,7 @@ def process_one(
     item_id = str(item["id"])
     pred_dir = confined_task_output_dir(out_root, item_id)
     os.makedirs(pred_dir, exist_ok=True)
-    normalized_search_mode = _resolve_search_mode(
-        search_mode, api_url=search_api_url, provider=search_provider, auth_env=search_auth_env,
-        use_local_tools=use_local_tools,
-    )
-    search_api_url = str(
-        os.environ.get("OFFICEQA_SEARCH_API_URL", DEFAULT_CUSTOM_SEARCH_URL)
-        if search_api_url is None else search_api_url
-    ).strip()
-    search_provider = str(search_provider or "duckduckgo").strip()
+    normalized_search_mode = _normalize_search_mode(search_mode)
     docs_roots: list[str] = []
     candidate_files: list[str] = []
     oracle_context = ""
@@ -774,11 +761,11 @@ def run_batch(
     workers: int = 8,
     max_tool_turns: int = 12,
     max_completion_tokens: int = 16384,
-    search_mode: str = "auto",
+    search_mode: str = _DEFAULT_SEARCH_MODE,
     max_queries_per_turn: int = 4,
-    search_api_url: str | None = None,
+    search_api_url: str = "",
     search_auth_env: str = "OFFICEQA_CUSTOM_SEARCH_AUTH",
-    search_provider: str | None = None,
+    search_provider: str = "duckduckgo",
     search_max_num_results: int = 4,
     search_timeout_seconds: int = 20,
     use_local_tools: bool = True,

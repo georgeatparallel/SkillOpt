@@ -1,4 +1,10 @@
-"""Anonymous Parallel Search MCP for the OfficeQA controller's search rounds."""
+"""Parallel Search MCP client for the OfficeQA controller's search rounds.
+
+Reached only through the explicit `search_mode=parallel` selection. Every call
+sends the model's generated queries and the full task question (as the MCP
+`objective`) to Parallel's hosted endpoint, anonymously, on the documented
+lower-rate free tier.
+"""
 from __future__ import annotations
 
 import asyncio

@@ -24,12 +24,11 @@ env:
   workers: 4
   max_tool_turns: 24
   max_completion_tokens: 16384
-  # Fresh chat runs use keyless Parallel; saved offline/custom/Azure modes remain explicit.
-  search_mode: auto
+  search_mode: offline
   max_queries_per_turn: 4
-  search_api_url: null
+  search_api_url: http://apisix.westus2.cloudapp.azure.com/search_tool/search
   search_auth_env: OFFICEQA_CUSTOM_SEARCH_AUTH
-  search_provider: null
+  search_provider: duckduckgo
   search_max_num_results: 4
   search_timeout_seconds: 20
   limit: 0

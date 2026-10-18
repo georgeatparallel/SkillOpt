@@ -212,35 +212,47 @@ Benchmark-specific `env` keys are passed through to the adapter.
 
 ### OfficeQA web search
 
-New OfficeQA configs use `env.search_mode: auto`. With `openai_chat` or
-`qwen_chat`, an unconfigured search service uses
-[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)
-at `https://search.parallel.ai/mcp`. Search runs in Fast mode without an
-account or API key. The controller sends the model's `<search_queries>` to
-MCP and supplies the returned URLs and excerpts to the next model round.
-Parallel search does not require a local OfficeQA document corpus; parsed
-source-page context is included when that corpus is available. Model backend
-configuration is still required.
+`env.search_mode` selects how an OfficeQA rollout gathers evidence. The
+default is unchanged: `offline` searches only the configured local document
+corpus and makes no network search call.
 
 | Setting | Behavior |
 |---|---|
-| `env.search_mode: auto` | Use a configured custom service when `search_api_url`, `search_provider`, a custom `search_auth_env` name, `OFFICEQA_SEARCH_API_URL`, or the token named by `search_auth_env` is set; otherwise use Parallel for `openai_chat`/`qwen_chat`. Other backends, or `use_local_tools: false`, retain offline mode. |
-| `env.search_mode: parallel` | Explicitly select anonymous Parallel search with `openai_chat`/`qwen_chat`, ignoring custom service settings. |
-| `env.search_mode: offline` | Keep search local to the configured document corpus, with no Parallel connection. `env.use_local_tools: false` also disables local function tools in this mode. |
-| `env.search_mode: custom_search` | Keep the existing token-authenticated HTTP service and provider. Set `search_api_url`, `search_auth_env` and `search_provider` for your service. |
-| `env.search_mode: azure_search` | Keep the existing model-provided Azure search path. |
+| `env.search_mode: offline` (default) | Keep search local to the configured document corpus. `env.use_local_tools: false` also disables local function tools in this mode. |
+| `env.search_mode: custom_search` | Use the token-authenticated HTTP service. Set `search_api_url`, `search_auth_env` and `search_provider` for your service. |
+| `env.search_mode: azure_search` | Use the model-provided Azure search path. |
+| `env.search_mode: parallel` | Opt in to Parallel's hosted Search MCP. Requires `openai_chat` or `qwen_chat` and the `parallel` extra. |
 | `env.search_timeout_seconds` | Whole MCP discovery/search deadline in seconds (default `20`). |
 | `env.search_max_num_results` | Maximum number of Parallel evidence results per round (default `4`). |
-| `env.max_queries_per_turn` / `env.max_tool_turns` | Bound model-requested queries and model rounds as before. |
+| `env.max_queries_per_turn` / `env.max_tool_turns` | Bound model-requested queries and model rounds. |
 
-Existing saved `offline`, `custom_search`, and `azure_search` settings remain
-authoritative. To keep a new experiment local, set `env.search_mode=offline`
-with `--cfg-options`. To switch a saved config to Parallel, set
-`env.search_mode=parallel`. Explicit providers never fall back to Parallel on
-failure. Anonymous requests do not use `PARALLEL_API_KEY` or saved MCP
-credentials; service errors, including free-tier limits, fail the rollout
-with a search diagnostic. This provider changes the evidence source, so its
-scores are not a reproduction of the paper's Google-backed search setting.
+#### Parallel Search MCP (opt-in)
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)
+is never selected automatically. It is used only when you set
+`env.search_mode=parallel` explicitly, for example with
+`--cfg-options env.search_mode=parallel`. It also needs the optional MCP
+client, installed with `pip install 'skillopt[parallel]'`; selecting the mode
+without that extra raises an error naming the install command. Every other
+mode, and every OfficeQA import, works without `mcp` installed.
+
+**Data boundary.** When this mode is selected, each search round sends data
+to Parallel's hosted endpoint at `https://search.parallel.ai/mcp`: the
+model's generated `<search_queries>`, and the **full text of the task
+question** as the MCP `objective` argument. Do not select this mode for
+tasks whose question text cannot leave your environment. Requests are
+anonymous — they carry no `PARALLEL_API_KEY` and no saved MCP credentials —
+so they run on the anonymous, lower-rate free tier described in Parallel's
+documentation. That tier is rate-limited, not unmetered: expect throttling on
+sustained runs, and use a keyed provider for large sweeps. Rate-limit and
+other service errors fail
+the rollout with a search diagnostic; an explicit provider never silently
+falls back to another one.
+
+Parallel search does not require a local OfficeQA document corpus; parsed
+source-page context is included when that corpus is available. This mode
+changes the evidence source, so its scores are not directly comparable to,
+and are not a reproduction of, the paper's Google-backed search setting.
 
 ## Credential Environment Variables
 
