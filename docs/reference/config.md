@@ -224,7 +224,7 @@ configuration is still required.
 
 | Setting | Behavior |
 |---|---|
-| `env.search_mode: auto` | Use a configured custom service when `search_api_url`, `search_provider`, `OFFICEQA_SEARCH_API_URL`, or the token named by `search_auth_env` is set; otherwise use Parallel for `openai_chat`/`qwen_chat`. Other backends, or `use_local_tools: false`, retain offline mode. |
+| `env.search_mode: auto` | Use a configured custom service when `search_api_url`, `search_provider`, a custom `search_auth_env` name, `OFFICEQA_SEARCH_API_URL`, or the token named by `search_auth_env` is set; otherwise use Parallel for `openai_chat`/`qwen_chat`. Other backends, or `use_local_tools: false`, retain offline mode. |
 | `env.search_mode: parallel` | Explicitly select anonymous Parallel search with `openai_chat`/`qwen_chat`, ignoring custom service settings. |
 | `env.search_mode: offline` | Keep search local to the configured document corpus, with no Parallel connection. `env.use_local_tools: false` also disables local function tools in this mode. |
 | `env.search_mode: custom_search` | Keep the existing token-authenticated HTTP service and provider. Set `search_api_url`, `search_auth_env` and `search_provider` for your service. |

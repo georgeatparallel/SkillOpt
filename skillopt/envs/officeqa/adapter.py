@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from skillopt.datasets.base import BatchSpec
 from skillopt.envs.base import EnvAdapter
 from skillopt.envs.officeqa.dataloader import OfficeQADataLoader
@@ -44,6 +46,9 @@ class OfficeQAAdapter(EnvAdapter):
         self.search_mode = str(search_mode or "offline")
         self.max_queries_per_turn = int(max_queries_per_turn)
         self.search_api_url = search_api_url
+        if search_api_url is None and self.search_mode.strip().lower() in {"custom", "custom_search"}:
+            # Preserve the programmatic adapter's existing local-service default.
+            self.search_api_url = os.environ.get("OFFICEQA_SEARCH_API_URL", "http://localhost:8080/search_tool/search")
         self.search_auth_env = str(search_auth_env or "OFFICEQA_CUSTOM_SEARCH_AUTH").strip()
         self.search_provider = search_provider
         self.search_max_num_results = int(search_max_num_results)

@@ -91,7 +91,9 @@ def _resolve_search_mode(
         return mode
     if not use_local_tools:
         return _DEFAULT_SEARCH_MODE
-    if (api_url or os.environ.get("OFFICEQA_SEARCH_API_URL", "")).strip() or (provider or "").strip() or os.environ.get(auth_env, "").strip():
+    if ((api_url or os.environ.get("OFFICEQA_SEARCH_API_URL", "")).strip()
+            or (provider or "").strip() or auth_env != "OFFICEQA_CUSTOM_SEARCH_AUTH"
+            or os.environ.get(auth_env, "").strip()):
         return _CUSTOM_SEARCH_MODE
     # Other harnesses retain their existing local tools and permission controls.
     return _PARALLEL_SEARCH_MODE if get_target_backend() in {"openai_chat", "qwen_chat"} else _DEFAULT_SEARCH_MODE

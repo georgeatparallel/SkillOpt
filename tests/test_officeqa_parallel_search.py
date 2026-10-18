@@ -134,16 +134,33 @@ def test_explicit_modes_override_ambient_settings(mode, monkeypatch):
     assert resolved == {"custom": "custom_search", "azure": "azure_search"}.get(mode, mode)
 
 
-@pytest.mark.parametrize("setting", ["token", "url", "provider", "env_url"])
+@pytest.mark.parametrize("setting", ["token", "url", "provider", "env_url", "auth_env"])
 def test_auto_preserves_each_configured_service(setting, monkeypatch):
     kwargs = {"api_url": None, "provider": None, "auth_env": "OFFICEQA_CUSTOM_SEARCH_AUTH"}
     if setting == "token":
         monkeypatch.setenv("OFFICEQA_CUSTOM_SEARCH_AUTH", "configured-token")
     elif setting == "env_url":
         monkeypatch.setenv("OFFICEQA_SEARCH_API_URL", "https://configured.example")
+    elif setting == "auth_env":
+        kwargs["auth_env"] = "MY_SEARCH_TOKEN"
     else:
         kwargs["api_url" if setting == "url" else "provider"] = "https://configured.example" if setting == "url" else "google"
     assert rollout._resolve_search_mode("auto", **kwargs) == "custom_search"
+
+
+@pytest.mark.parametrize("url", [None, "https://configured.example/search"])
+def test_legacy_adapter_preserves_omitted_custom_url(tmp_path, monkeypatch, transport, url):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    monkeypatch.setenv("OFFICEQA_CUSTOM_SEARCH_AUTH", "configured-token")
+    if url:
+        monkeypatch.setenv("OFFICEQA_SEARCH_API_URL", url)
+    scripted_model(monkeypatch)
+    with mock.patch.object(rollout, "custom_search", return_value="URL: https://example.org/treasury?year=1776\nThe declaration was signed in 1776.") as custom:
+        rows = OfficeQAAdapter(search_mode="custom_search", workers=1, max_tool_turns=2, data_dirs=[str(docs)]).rollout([ITEM], "", str(tmp_path / "out"))
+    assert rows[0]["hard"] == 1
+    assert custom.call_args.kwargs["api_url"] == (url or "http://localhost:8080/search_tool/search")
+    assert not transport[0]
 
 
 @pytest.mark.parametrize("backend", ["codex_exec", "claude_code_exec", "cursor_exec", "copilot_exec", "openai_compatible"])
