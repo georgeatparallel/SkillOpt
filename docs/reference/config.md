@@ -210,6 +210,38 @@ forwarded consistently to both SDK and CLI execution paths.
 
 Benchmark-specific `env` keys are passed through to the adapter.
 
+### OfficeQA web search
+
+New OfficeQA configs use `env.search_mode: auto`. With `openai_chat` or
+`qwen_chat`, an unconfigured search service uses
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)
+at `https://search.parallel.ai/mcp`. Search runs in Fast mode without an
+account or API key. The controller sends the model's `<search_queries>` to
+MCP and supplies the returned URLs and excerpts to the next model round.
+Parallel search does not require a local OfficeQA document corpus; parsed
+source-page context is included when that corpus is available. Model backend
+configuration is still required.
+
+| Setting | Behavior |
+|---|---|
+| `env.search_mode: auto` | Use a configured custom service when `search_api_url`, `search_provider`, `OFFICEQA_SEARCH_API_URL`, or the token named by `search_auth_env` is set; otherwise use Parallel for `openai_chat`/`qwen_chat`. Other backends, or `use_local_tools: false`, retain offline mode. |
+| `env.search_mode: parallel` | Explicitly select anonymous Parallel search with `openai_chat`/`qwen_chat`, ignoring custom service settings. |
+| `env.search_mode: offline` | Keep search local to the configured document corpus, with no Parallel connection. `env.use_local_tools: false` also disables local function tools in this mode. |
+| `env.search_mode: custom_search` | Keep the existing token-authenticated HTTP service and provider. Set `search_api_url`, `search_auth_env` and `search_provider` for your service. |
+| `env.search_mode: azure_search` | Keep the existing model-provided Azure search path. |
+| `env.search_timeout_seconds` | Whole MCP discovery/search deadline in seconds (default `20`). |
+| `env.search_max_num_results` | Maximum number of Parallel evidence results per round (default `4`). |
+| `env.max_queries_per_turn` / `env.max_tool_turns` | Bound model-requested queries and model rounds as before. |
+
+Existing saved `offline`, `custom_search`, and `azure_search` settings remain
+authoritative. To keep a new experiment local, set `env.search_mode=offline`
+with `--cfg-options`. To switch a saved config to Parallel, set
+`env.search_mode=parallel`. Explicit providers never fall back to Parallel on
+failure. Anonymous requests do not use `PARALLEL_API_KEY` or saved MCP
+credentials; service errors, including free-tier limits, fail the rollout
+with a search diagnostic. This provider changes the evidence source, so its
+scores are not a reproduction of the paper's Google-backed search setting.
+
 ## Credential Environment Variables
 
 ### Azure-family backend

@@ -7,6 +7,10 @@ All notable changes to SkillOpt are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **OfficeQA Parallel Search MCP**: fresh `auto` search configurations use
+  anonymous Fast-mode web search with `openai_chat`/`qwen_chat` when no custom
+  service is configured. Saved offline, custom-service and Azure search modes
+  remain explicit choices; other harnesses retain their local tool permissions.
 - **SkillOpt-Sleep paired A/B evalkit** (`python -m skillopt_sleep.evalkit`):
   McNemar plus percentile-bootstrap CIs on a fixed task manifest, with
   task-cluster multi-seed inference and seeded null calibration for exact-test

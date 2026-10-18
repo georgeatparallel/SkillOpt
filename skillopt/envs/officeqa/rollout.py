@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from skillopt.envs.officeqa.evaluator import evaluate
+from skillopt.envs.officeqa.parallel_search import parallel_search
 from skillopt.envs.officeqa.tool_runtime import (
+    DEFAULT_CUSTOM_SEARCH_URL,
     build_oracle_parsed_pages_context,
     custom_search,
     resolve_candidate_files,
@@ -68,13 +71,31 @@ _SEARCH_RE = re.compile(r"<search_queries>(.*?)</search_queries>", re.IGNORECASE
 _DEFAULT_SEARCH_MODE = "offline"
 _CUSTOM_SEARCH_MODE = "custom_search"
 _AZURE_SEARCH_MODE = "azure_search"
+_PARALLEL_SEARCH_MODE = "parallel"
 def _normalize_search_mode(search_mode: str | None) -> str:
     normalized = str(search_mode or _DEFAULT_SEARCH_MODE).strip().lower()
+    if normalized in {"auto", _PARALLEL_SEARCH_MODE}:
+        return normalized
     if normalized in {"custom", _CUSTOM_SEARCH_MODE}:
         return _CUSTOM_SEARCH_MODE
     if normalized in {"azure", _AZURE_SEARCH_MODE}:
         return _AZURE_SEARCH_MODE
     return _DEFAULT_SEARCH_MODE
+def _resolve_search_mode(
+    search_mode: str | None, *, api_url: str | None, provider: str | None, auth_env: str,
+    use_local_tools: bool = True,
+) -> str:
+    """Resolve fresh installations without overriding saved modes or services."""
+    mode = _normalize_search_mode(search_mode)
+    if mode != "auto":
+        return mode
+    if not use_local_tools:
+        return _DEFAULT_SEARCH_MODE
+    if (api_url or os.environ.get("OFFICEQA_SEARCH_API_URL", "")).strip() or (provider or "").strip() or os.environ.get(auth_env, "").strip():
+        return _CUSTOM_SEARCH_MODE
+    # Other harnesses retain their existing local tools and permission controls.
+    return _PARALLEL_SEARCH_MODE if get_target_backend() in {"openai_chat", "qwen_chat"} else _DEFAULT_SEARCH_MODE
+
 def _build_system(
     skill_content: str,
     *,
@@ -95,7 +116,7 @@ def _build_system(
             "answer inside <answer>...</answer>.\n\n"
             + skill_section
         ).rstrip()
-    if normalized_search_mode == _CUSTOM_SEARCH_MODE:
+    if normalized_search_mode in {_CUSTOM_SEARCH_MODE, _PARALLEL_SEARCH_MODE}:
         protocol = (
             "You are an expert OfficeQA research assistant. Solve the question using the provided oracle parsed "
             "OfficeQA page(s) and evidence returned by the controller-managed custom search loop.\n\n"
@@ -169,7 +190,7 @@ def _build_user(
         parts.append("## File Hints\n" + "\n".join(f"- {hint}" for hint in item["source_files"]))
     if diagnostic_mode and diagnostic_instruction.strip():
         parts.append(f"## Training Readout\n{diagnostic_instruction.strip()}")
-    if normalized_search_mode == _CUSTOM_SEARCH_MODE:
+    if normalized_search_mode in {_CUSTOM_SEARCH_MODE, _PARALLEL_SEARCH_MODE}:
         parts.append(
             _build_round_instruction(
                 turn=turn,
@@ -352,16 +373,17 @@ def _run_custom_search_process(
     search_max_num_results: int,
     search_timeout_seconds: int,
     oracle_context: str = "",
+    search_mode: str = _CUSTOM_SEARCH_MODE,
 ) -> tuple[str, str, str, str, list[dict], str, dict]:
-    if not str(search_api_url or "").strip():
+    if search_mode == _CUSTOM_SEARCH_MODE and not str(search_api_url or "").strip():
         raise ValueError("custom_search mode requires a non-empty search_api_url")
-    if not os.environ.get(search_auth_env, "").strip():
+    if search_mode == _CUSTOM_SEARCH_MODE and not os.environ.get(search_auth_env, "").strip():
         raise ValueError(f"custom_search mode requires auth token env var {search_auth_env}")
     if get_target_backend() not in {"openai_chat", "qwen_chat"}:
-        raise ValueError("custom_search mode is only supported with target_backend='openai_chat' or 'qwen_chat'")
+        raise ValueError(f"{search_mode} mode is only supported with target_backend='openai_chat' or 'qwen_chat'")
     system = _build_system(
         skill_content,
-        search_mode=_CUSTOM_SEARCH_MODE,
+        search_mode=search_mode,
         max_tool_turns=max_tool_turns,
         max_queries_per_turn=max_queries_per_turn,
     )
@@ -369,7 +391,7 @@ def _run_custom_search_process(
         item,
         diagnostic_mode=diagnostic_mode,
         diagnostic_instruction=diagnostic_instruction,
-        search_mode=_CUSTOM_SEARCH_MODE,
+        search_mode=search_mode,
         turn=1,
         max_tool_turns=max_tool_turns,
         max_queries_per_turn=max_queries_per_turn,
@@ -385,6 +407,7 @@ def _run_custom_search_process(
     final_answer = ""
     fail_reason = ""
     last_response_metadata: dict = {}
+    session_id = uuid.uuid4().hex
     for turn in range(1, max_tool_turns + 1):
         message, _ = chat_target_messages(
             messages=messages,
@@ -411,15 +434,22 @@ def _run_custom_search_process(
         if not queries:
             fail_reason = "Model neither produced search queries nor a final answer"
             break
-        results_text = _execute_custom_search_round(
-            queries,
-            api_url=search_api_url,
-            auth_env=search_auth_env,
-            provider=search_provider,
-            max_num_results=search_max_num_results,
-            timeout=search_timeout_seconds,
-        )
-        conversation.append({"type": "tool_call", "turn": turn, "cmd": f"custom_search({queries!r})", "obs": results_text})
+        if search_mode == _PARALLEL_SEARCH_MODE:
+            # A failed explicit provider stays an error; never retry via another service.
+            results_text = parallel_search(
+                queries, objective=item["question"], session_id=session_id,
+                max_num_results=search_max_num_results, timeout=search_timeout_seconds,
+            )
+        else:
+            results_text = _execute_custom_search_round(
+                queries,
+                api_url=search_api_url,
+                auth_env=search_auth_env,
+                provider=search_provider,
+                max_num_results=search_max_num_results,
+                timeout=search_timeout_seconds,
+            )
+        conversation.append({"type": "tool_call", "turn": turn, "cmd": f"{search_mode}({queries!r})", "obs": results_text})
         latest_user = (
             f"## Search Results Round {turn}\n{results_text}\n\n"
             + _build_round_instruction(
@@ -518,11 +548,11 @@ def process_one(
     *,
     max_tool_turns: int = 12,
     max_completion_tokens: int = 16384,
-    search_mode: str = _DEFAULT_SEARCH_MODE,
+    search_mode: str = "auto",
     max_queries_per_turn: int = 4,
-    search_api_url: str = "",
+    search_api_url: str | None = None,
     search_auth_env: str = "OFFICEQA_CUSTOM_SEARCH_AUTH",
-    search_provider: str = "duckduckgo",
+    search_provider: str | None = None,
     search_max_num_results: int = 4,
     search_timeout_seconds: int = 20,
     use_local_tools: bool = True,
@@ -533,7 +563,15 @@ def process_one(
     item_id = str(item["id"])
     pred_dir = confined_task_output_dir(out_root, item_id)
     os.makedirs(pred_dir, exist_ok=True)
-    normalized_search_mode = _normalize_search_mode(search_mode)
+    normalized_search_mode = _resolve_search_mode(
+        search_mode, api_url=search_api_url, provider=search_provider, auth_env=search_auth_env,
+        use_local_tools=use_local_tools,
+    )
+    search_api_url = str(
+        os.environ.get("OFFICEQA_SEARCH_API_URL", DEFAULT_CUSTOM_SEARCH_URL)
+        if search_api_url is None else search_api_url
+    ).strip()
+    search_provider = str(search_provider or "duckduckgo").strip()
     docs_roots: list[str] = []
     candidate_files: list[str] = []
     oracle_context = ""
@@ -550,8 +588,14 @@ def process_one(
                 else "Treat it as primary document evidence for answering the question."
             ),
         )
-    elif normalized_search_mode == _CUSTOM_SEARCH_MODE:
-        docs_roots = resolve_docs_roots(data_dirs)
+    elif normalized_search_mode in {_CUSTOM_SEARCH_MODE, _PARALLEL_SEARCH_MODE}:
+        try:
+            docs_roots = resolve_docs_roots(data_dirs)
+        except FileNotFoundError:
+            if normalized_search_mode == _CUSTOM_SEARCH_MODE:
+                raise
+            # Web evidence works without downloading a local OfficeQA corpus.
+            docs_roots = []
         if item.get("source_files"):
             candidate_files = resolve_candidate_files(item.get("source_files", []), docs_roots)
         oracle_context = build_oracle_parsed_pages_context(
@@ -583,7 +627,7 @@ def process_one(
     last_response_metadata: dict = {}
     allowed_files = [os.path.basename(path) for path in candidate_files]
     try:
-        if normalized_search_mode == _CUSTOM_SEARCH_MODE:
+        if normalized_search_mode in {_CUSTOM_SEARCH_MODE, _PARALLEL_SEARCH_MODE}:
             system, user, final_response, final_answer, conversation, fail_reason, last_response_metadata = _run_custom_search_process(
                 item,
                 skill_content,
@@ -598,6 +642,7 @@ def process_one(
                 search_max_num_results=search_max_num_results,
                 search_timeout_seconds=search_timeout_seconds,
                 oracle_context=oracle_context,
+                search_mode=normalized_search_mode,
             )
         elif normalized_search_mode == _AZURE_SEARCH_MODE:
             system, user, final_response, final_answer, conversation, fail_reason, last_response_metadata = _run_azure_search_process(
@@ -727,11 +772,11 @@ def run_batch(
     workers: int = 8,
     max_tool_turns: int = 12,
     max_completion_tokens: int = 16384,
-    search_mode: str = _DEFAULT_SEARCH_MODE,
+    search_mode: str = "auto",
     max_queries_per_turn: int = 4,
-    search_api_url: str = "",
+    search_api_url: str | None = None,
     search_auth_env: str = "OFFICEQA_CUSTOM_SEARCH_AUTH",
-    search_provider: str = "duckduckgo",
+    search_provider: str | None = None,
     search_max_num_results: int = 4,
     search_timeout_seconds: int = 20,
     use_local_tools: bool = True,
