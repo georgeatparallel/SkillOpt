@@ -67,7 +67,8 @@ def parallel_search(
     """Search related queries with a bounded request and render URL evidence.
 
     The controller supplies one stable session ID per OfficeQA task, including
-    subsequent rounds. Timeouts and cancellation propagate to the controller.
+    subsequent rounds. Timeouts and cancellation propagate to the controller;
+    an exceeded deadline always raises the built-in `TimeoutError`.
     """
     if not queries or any(not isinstance(query, str) or not query.strip() for query in queries):
         raise ValueError("Parallel search requires non-empty queries")
@@ -85,6 +86,10 @@ def parallel_search(
         error = exc
         while len(getattr(error, "exceptions", ())) == 1:
             error = error.exceptions[0]
+        if isinstance(error, asyncio.TimeoutError):
+            # Before 3.11 `asyncio.TimeoutError` is its own class rather than the
+            # built-in one, so normalize the deadline for callers on every version.
+            raise TimeoutError(f"Parallel search exceeded its {timeout}s deadline") from exc
         if error is not exc:
             raise error from exc
         raise
